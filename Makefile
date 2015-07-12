@@ -1,6 +1,8 @@
 Target=typhoon
+cc=gcc -Wall
+
 all:
-	gcc main.c paser_net.c -o $(Target) -lpcap
+	$(cc) main.c paser_net.c -o $(Target) -lpcap
 
 run: all
 	./$(Target)
