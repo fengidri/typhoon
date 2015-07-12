@@ -14,6 +14,7 @@
 #include <time.h>
 
 #include <pcap.h>
+#include "paser_net.h"
 
 #define logerror(format, ...) fprintf(stdout, format, ## __VA_ARGS__)
 #define logwarn(format, ...) fprintf(stdout, format, ## __VA_ARGS__)
@@ -25,7 +26,7 @@ static void handler(u_char *arg, const struct pcap_pkthdr *pkthdr, const u_char 
         logwarn("This pkt the date get is short.\n");
         return;
     }
-    logerror("get pk\n");
+    logerror("network type: %d\n", net_network_type(packet));
 
 }
 

@@ -1,6 +1,6 @@
 Target=typhoon
 all:
-	gcc main.c -o $(Target) -lpcap
+	gcc main.c paser_net.c -o $(Target) -lpcap
 
 run: all
 	./$(Target)
