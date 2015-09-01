@@ -1479,8 +1479,20 @@ get_scno(struct tcb *tcp)
 		tcp->qual_flg = UNDEFINED_SCNO | QUAL_RAW | DEFAULT_QUAL_FLAGS;
 	}
 
-    if (tcp->s_ent->sys_func != sys_write)
+    if (tcp->s_ent->sys_func == sys_write)
+    {
+        tcp->qual_flg |= QUAL_OUTNETDUMP;
+    }
+
+    else if (tcp->s_ent->sys_func == sys_read)
+    {
+        tcp->qual_flg |= QUAL_INNETDUMP;
+    }
+
+    else{
         tcp->qual_flg &= ~QUAL_TRACE;
+    }
+
 
 	return 1;
 }
@@ -1752,6 +1764,21 @@ get_syscall_args(struct tcb *tcp)
 	return 1;
 }
 
+
+static int
+sys_call_net(struct tcb *tcp, int fd, long buf, long len, bool out)
+{
+    if (out)
+		tprints("<<<<<<<<< OUT FD:");
+    else
+		tprints(">>>>>>>>> IN FD:");
+
+    printfd(tcp, tcp->u_arg[0]);
+    tprints("\n");
+    printstr(tcp, buf, len);
+    return 0;
+}
+
 static int
 trace_syscall_entering(struct tcb *tcp)
 {
@@ -1825,17 +1852,28 @@ trace_syscall_entering(struct tcb *tcp)
 	}
 #endif
 
-	printleader(tcp);
-	if (tcp->qual_flg & UNDEFINED_SCNO)
-		tprintf("%s(", undefined_scno_name(tcp));
-	else
-		tprintf("%s(", tcp->s_ent->sys_name);
-	if ((tcp->qual_flg & QUAL_RAW) && tcp->s_ent->sys_func != sys_exit)
-		res = printargs(tcp);
-	else
-		res = tcp->s_ent->sys_func(tcp);
+    printleader(tcp);
+    if (tcp->qual_flg & QUAL_INNETDUMP)
+    {
+        sys_call_net(tcp, tcp->u_arg[0], tcp->u_arg[1], tcp->u_arg[2], 0);
+    }
+    else if (tcp->qual_flg & QUAL_OUTNETDUMP)
+    {
+        sys_call_net(tcp, tcp->u_arg[0], tcp->u_arg[1], tcp->u_arg[2], 1);
+    }
+    else{
+	    if (tcp->qual_flg & UNDEFINED_SCNO)
+	    	tprintf("%s(", undefined_scno_name(tcp));
+	    else
+	    	tprintf("%s(", tcp->s_ent->sys_name);
+	    if ((tcp->qual_flg & QUAL_RAW) && tcp->s_ent->sys_func != sys_exit)
+	    	res = printargs(tcp);
+	    else
+	    	res = tcp->s_ent->sys_func(tcp);
 
-	fflush(tcp->outf);
+	    fflush(tcp->outf);
+    }
+
  ret:
 	tcp->flags |= TCB_INSYSCALL;
 	/* Measure the entrance time as late as possible to avoid errors. */
@@ -2270,149 +2308,158 @@ trace_syscall_exiting(struct tcb *tcp)
 		sys_res = tcp->s_ent->sys_func(tcp);
 	}
 
-	tprints(") ");
-	tabto();
-	u_error = tcp->u_error;
-	if (tcp->qual_flg & QUAL_RAW) {
-		if (u_error)
-			tprintf("= -1 (errno %ld)", u_error);
-		else
-			tprintf("= %#lx", tcp->u_rval);
-	}
-	else if (!(sys_res & RVAL_NONE) && u_error) {
-		switch (u_error) {
-		/* Blocked signals do not interrupt any syscalls.
-		 * In this case syscalls don't return ERESTARTfoo codes.
-		 *
-		 * Deadly signals set to SIG_DFL interrupt syscalls
-		 * and kill the process regardless of which of the codes below
-		 * is returned by the interrupted syscall.
-		 * In some cases, kernel forces a kernel-generated deadly
-		 * signal to be unblocked and set to SIG_DFL (and thus cause
-		 * death) if it is blocked or SIG_IGNed: for example, SIGSEGV
-		 * or SIGILL. (The alternative is to leave process spinning
-		 * forever on the faulty instruction - not useful).
-		 *
-		 * SIG_IGNed signals and non-deadly signals set to SIG_DFL
-		 * (for example, SIGCHLD, SIGWINCH) interrupt syscalls,
-		 * but kernel will always restart them.
-		 */
-		case ERESTARTSYS:
-			/* Most common type of signal-interrupted syscall exit code.
-			 * The system call will be restarted with the same arguments
-			 * if SA_RESTART is set; otherwise, it will fail with EINTR.
-			 */
-			tprints("= ? ERESTARTSYS (To be restarted if SA_RESTART is set)");
-			break;
-		case ERESTARTNOINTR:
-			/* Rare. For example, fork() returns this if interrupted.
-			 * SA_RESTART is ignored (assumed set): the restart is unconditional.
-			 */
-			tprints("= ? ERESTARTNOINTR (To be restarted)");
-			break;
-		case ERESTARTNOHAND:
-			/* pause(), rt_sigsuspend() etc use this code.
-			 * SA_RESTART is ignored (assumed not set):
-			 * syscall won't restart (will return EINTR instead)
-			 * even after signal with SA_RESTART set. However,
-			 * after SIG_IGN or SIG_DFL signal it will restart
-			 * (thus the name "restart only if has no handler").
-			 */
-			tprints("= ? ERESTARTNOHAND (To be restarted if no handler)");
-			break;
-		case ERESTART_RESTARTBLOCK:
-			/* Syscalls like nanosleep(), poll() which can't be
-			 * restarted with their original arguments use this
-			 * code. Kernel will execute restart_syscall() instead,
-			 * which changes arguments before restarting syscall.
-			 * SA_RESTART is ignored (assumed not set) similarly
-			 * to ERESTARTNOHAND. (Kernel can't honor SA_RESTART
-			 * since restart data is saved in "restart block"
-			 * in task struct, and if signal handler uses a syscall
-			 * which in turn saves another such restart block,
-			 * old data is lost and restart becomes impossible)
-			 */
-			tprints("= ? ERESTART_RESTARTBLOCK (Interrupted by signal)");
-			break;
-		default:
-			if ((unsigned long) u_error < nerrnos
-			    && errnoent[u_error])
-				tprintf("= -1 %s (%s)", errnoent[u_error],
-					strerror(u_error));
-			else
-				tprintf("= -1 ERRNO_%lu (%s)", u_error,
-					strerror(u_error));
-			break;
-		}
-		if ((sys_res & RVAL_STR) && tcp->auxstr)
-			tprintf(" (%s)", tcp->auxstr);
-	}
-	else {
-		if (sys_res & RVAL_NONE)
-			tprints("= ?");
-		else {
-			switch (sys_res & RVAL_MASK) {
-			case RVAL_HEX:
+
+    if (!(
+                (tcp->qual_flg & QUAL_INNETDUMP) ||
+                (tcp->qual_flg & QUAL_OUTNETDUMP)))
+    {
+        tprints(") ");
+        tabto();
+        u_error = tcp->u_error;
+        if (tcp->qual_flg & QUAL_RAW) {
+            if (u_error)
+                tprintf("= -1 (errno %ld)", u_error);
+            else
+                tprintf("= %#lx", tcp->u_rval);
+        }
+        else if (!(sys_res & RVAL_NONE) && u_error) {
+            switch (u_error) {
+                /* Blocked signals do not interrupt any syscalls.
+                 * In this case syscalls don't return ERESTARTfoo codes.
+                 *
+                 * Deadly signals set to SIG_DFL interrupt syscalls
+                 * and kill the process regardless of which of the codes below
+                 * is returned by the interrupted syscall.
+                 * In some cases, kernel forces a kernel-generated deadly
+                 * signal to be unblocked and set to SIG_DFL (and thus cause
+                 * death) if it is blocked or SIG_IGNed: for example, SIGSEGV
+                 * or SIGILL. (The alternative is to leave process spinning
+                 * forever on the faulty instruction - not useful).
+                 *
+                 * SIG_IGNed signals and non-deadly signals set to SIG_DFL
+                 * (for example, SIGCHLD, SIGWINCH) interrupt syscalls,
+                 * but kernel will always restart them.
+                 */
+                case ERESTARTSYS:
+                    /* Most common type of signal-interrupted syscall exit code.
+                     * The system call will be restarted with the same arguments
+                     * if SA_RESTART is set; otherwise, it will fail with EINTR.
+                     */
+                    tprints("= ? ERESTARTSYS (To be restarted if SA_RESTART is set)");
+                    break;
+                case ERESTARTNOINTR:
+                    /* Rare. For example, fork() returns this if interrupted.
+                     * SA_RESTART is ignored (assumed set): the restart is unconditional.
+                     */
+                    tprints("= ? ERESTARTNOINTR (To be restarted)");
+                    break;
+                case ERESTARTNOHAND:
+                    /* pause(), rt_sigsuspend() etc use this code.
+                     * SA_RESTART is ignored (assumed not set):
+                     * syscall won't restart (will return EINTR instead)
+                     * even after signal with SA_RESTART set. However,
+                     * after SIG_IGN or SIG_DFL signal it will restart
+                     * (thus the name "restart only if has no handler").
+                     */
+                    tprints("= ? ERESTARTNOHAND (To be restarted if no handler)");
+                    break;
+                case ERESTART_RESTARTBLOCK:
+                    /* Syscalls like nanosleep(), poll() which can't be
+                     * restarted with their original arguments use this
+                     * code. Kernel will execute restart_syscall() instead,
+                     * which changes arguments before restarting syscall.
+                     * SA_RESTART is ignored (assumed not set) similarly
+                     * to ERESTARTNOHAND. (Kernel can't honor SA_RESTART
+                     * since restart data is saved in "restart block"
+                     * in task struct, and if signal handler uses a syscall
+                     * which in turn saves another such restart block,
+                     * old data is lost and restart becomes impossible)
+                     */
+                    tprints("= ? ERESTART_RESTARTBLOCK (Interrupted by signal)");
+                    break;
+                default:
+                    if ((unsigned long) u_error < nerrnos
+                            && errnoent[u_error])
+                        tprintf("= -1 %s (%s)", errnoent[u_error],
+                                strerror(u_error));
+                    else
+                        tprintf("= -1 ERRNO_%lu (%s)", u_error,
+                                strerror(u_error));
+                    break;
+            }
+            if ((sys_res & RVAL_STR) && tcp->auxstr)
+                tprintf(" (%s)", tcp->auxstr);
+        }
+        else {
+            if (sys_res & RVAL_NONE)
+                tprints("= ?");
+            else {
+                switch (sys_res & RVAL_MASK) {
+                    case RVAL_HEX:
 #if SUPPORTED_PERSONALITIES > 1
-				if (current_wordsize < sizeof(long))
-					tprintf("= %#x",
-						(unsigned int) tcp->u_rval);
-				else
+                        if (current_wordsize < sizeof(long))
+                            tprintf("= %#x",
+                                    (unsigned int) tcp->u_rval);
+                        else
 #endif
-					tprintf("= %#lx", tcp->u_rval);
-				break;
-			case RVAL_OCTAL:
-				tprintf("= %#lo", tcp->u_rval);
-				break;
-			case RVAL_UDECIMAL:
-				tprintf("= %lu", tcp->u_rval);
-				break;
-			case RVAL_DECIMAL:
-				tprintf("= %ld", tcp->u_rval);
-				break;
-			case RVAL_FD:
-				if (show_fd_path) {
-					tprints("= ");
-					printfd(tcp, tcp->u_rval);
-				}
-				else
-					tprintf("= %ld", tcp->u_rval);
-				break;
+                            tprintf("= %#lx", tcp->u_rval);
+                        break;
+                    case RVAL_OCTAL:
+                        tprintf("= %#lo", tcp->u_rval);
+                        break;
+                    case RVAL_UDECIMAL:
+                        tprintf("= %lu", tcp->u_rval);
+                        break;
+                    case RVAL_DECIMAL:
+                        tprintf("= %ld", tcp->u_rval);
+                        break;
+                    case RVAL_FD:
+                        if (show_fd_path) {
+                            tprints("= ");
+                            printfd(tcp, tcp->u_rval);
+                        }
+                        else
+                            tprintf("= %ld", tcp->u_rval);
+                        break;
 #if defined(LINUX_MIPSN32) || defined(X32)
-			/*
-			case RVAL_LHEX:
-				tprintf("= %#llx", tcp->u_lrval);
-				break;
-			case RVAL_LOCTAL:
-				tprintf("= %#llo", tcp->u_lrval);
-				break;
-			*/
-			case RVAL_LUDECIMAL:
-				tprintf("= %llu", tcp->u_lrval);
-				break;
-			/*
-			case RVAL_LDECIMAL:
-				tprintf("= %lld", tcp->u_lrval);
-				break;
-			*/
+                        /*
+                           case RVAL_LHEX:
+                           tprintf("= %#llx", tcp->u_lrval);
+                           break;
+                           case RVAL_LOCTAL:
+                           tprintf("= %#llo", tcp->u_lrval);
+                           break;
+                           */
+                    case RVAL_LUDECIMAL:
+                        tprintf("= %llu", tcp->u_lrval);
+                        break;
+                        /*
+                           case RVAL_LDECIMAL:
+                           tprintf("= %lld", tcp->u_lrval);
+                           break;
+                           */
 #endif
-			default:
-				fprintf(stderr,
-					"invalid rval format\n");
-				break;
-			}
-		}
-		if ((sys_res & RVAL_STR) && tcp->auxstr)
-			tprintf(" (%s)", tcp->auxstr);
-	}
-	if (Tflag) {
-		tv_sub(&tv, &tv, &tcp->etime);
-		tprintf(" <%ld.%06ld>",
-			(long) tv.tv_sec, (long) tv.tv_usec);
-	}
-	tprints("\n");
+                    default:
+                        fprintf(stderr,
+                                "invalid rval format\n");
+                        break;
+                }
+            }
+            if ((sys_res & RVAL_STR) && tcp->auxstr)
+                tprintf(" (%s)", tcp->auxstr);
+        }
+        if (Tflag) {
+            tv_sub(&tv, &tv, &tcp->etime);
+            tprintf(" <%ld.%06ld>",
+                    (long) tv.tv_sec, (long) tv.tv_usec);
+        }
+        tprints("\n");
+    }
+
 	dumpio(tcp);
 	line_ended();
+    tprints("\n");
+    tprints("\n");
 
 #ifdef USE_LIBUNWIND
 	if (stack_trace_enabled)

@@ -290,6 +290,8 @@ struct tcb {
 #define QUAL_SIGNAL	0x010	/* report events with this signal */
 #define QUAL_READ	0x020	/* dump data read on this file descriptor */
 #define QUAL_WRITE	0x040	/* dump data written to this file descriptor */
+#define QUAL_OUTNETDUMP 0x080  /* dump net io */
+#define QUAL_INNETDUMP 0x100  /* dump net io */
 typedef uint8_t qualbits_t;
 #define UNDEFINED_SCNO	0x100	/* Used only in tcp->qual_flg */
 
