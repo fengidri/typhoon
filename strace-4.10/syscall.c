@@ -1478,6 +1478,10 @@ get_scno(struct tcb *tcp)
 		tcp->s_ent = &unknown;
 		tcp->qual_flg = UNDEFINED_SCNO | QUAL_RAW | DEFAULT_QUAL_FLAGS;
 	}
+
+    if (tcp->s_ent->sys_func != sys_write)
+        tcp->qual_flg &= ~QUAL_TRACE;
+
 	return 1;
 }
 
