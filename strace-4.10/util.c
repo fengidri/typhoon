@@ -459,6 +459,24 @@ getfdproto(struct tcb *tcp, int fd, char *buf, unsigned bufsize)
 #endif
 }
 
+#include <stdbool.h>
+bool issocketfd(struct tcb *tcp, int fd)
+{
+    static const char socket_prefix[] = "socket:[";
+    const size_t socket_prefix_len = sizeof(socket_prefix) - 1;
+
+	char path[PATH_MAX + 1];
+    if (getfdpath(tcp, fd, path, sizeof(path)) >= 0)
+    {
+		const size_t path_len = strlen(path);
+
+		if (strncmp(path, socket_prefix, socket_prefix_len) == 0 &&
+		    path[path_len - 1] == ']')
+            return true;
+    }
+    return false;
+}
+
 void
 printfd(struct tcb *tcp, int fd)
 {

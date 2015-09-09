@@ -1479,22 +1479,33 @@ get_scno(struct tcb *tcp)
 		tcp->qual_flg = UNDEFINED_SCNO | QUAL_RAW | DEFAULT_QUAL_FLAGS;
 	}
 
-    if (tcp->s_ent->sys_func == sys_write)
+    if (tcp->s_ent->sys_func == sys_write
+        || tcp->s_ent->sys_func == sys_send
+        || tcp->s_ent->sys_func == sys_sendto)
     {
-        tcp->qual_flg |= QUAL_OUTNETDUMP;
+        if (issocketfd(tcp, tcp->u_arg[0]))
+        {
+            tcp->qual_flg |= QUAL_OUTNETDUMP;
+            return 1;
+        }
     }
 
-    else if (tcp->s_ent->sys_func == sys_read)
+    else if (tcp->s_ent->sys_func == sys_read
+            || tcp->s_ent->sys_func == sys_recvfrom)
     {
-        tcp->qual_flg |= QUAL_INNETDUMP;
+        if (issocketfd(tcp, tcp->u_arg[0]))
+        {
+            tcp->qual_flg |= QUAL_INNETDUMP;
+            return 1;
+
+        }
     }
 
-    else{
-        tcp->qual_flg &= ~QUAL_TRACE;
-    }
+    tcp->qual_flg &= ~QUAL_TRACE;
+    return 1;
 
 
-	return 1;
+
 }
 
 /*
@@ -1769,9 +1780,9 @@ static int
 sys_call_net(struct tcb *tcp, int fd, long buf, long len, bool out)
 {
     if (out)
-		tprints("<<<<<<<<< OUT FD:");
+		tprints("######### OUT FD:");
     else
-		tprints(">>>>>>>>> IN FD:");
+		tprints("********* IN FD:");
 
     printfd(tcp, tcp->u_arg[0]);
     tprints("\n");

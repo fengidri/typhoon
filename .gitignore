@@ -5,6 +5,19 @@
 *.elf
 .*
 typhoon
+Makefile
+config.h
+config.log
+config.status
+ioctlent0.h
+ioctlent1.h
+ioctlent2.h
+stamp-h1
+strace
+tags
+tests-m32/Makefile
+tests-mx32/Makefile
+tests/Makefile
 
 # Precompiled Headers
 *.gch

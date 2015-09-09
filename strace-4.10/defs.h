@@ -493,6 +493,7 @@ extern void sprint_timespec(char *, struct tcb *, long);
 extern void printsiginfo(const siginfo_t *, int);
 extern void printsiginfo_at(struct tcb *tcp, long addr);
 extern void printfd(struct tcb *, int);
+extern bool issocketfd(struct tcb *tcp, int fd);
 extern bool print_sockaddr_by_inode(const unsigned long, const char *);
 extern void print_dirfd(struct tcb *, int);
 extern void printsock(struct tcb *, long, int);
